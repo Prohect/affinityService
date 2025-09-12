@@ -1,6 +1,6 @@
 # affinityService
 
-`affinityService` 是一个 Windows 平台的进程 CPU 亲和性管理工具，支持自动设置自身和指定进程的 CPU 核心亲和，同时支持从 [Process Lasso](https://bitsum.com/) 的特定配置片段转换为本程序使用的配置格式。
+`affinityService` 是一个轻量化的 Windows 平台的进程 CPU 亲和性管理工具，支持自动设置自身和指定进程的 CPU 核心亲和，同时支持从 [Process Lasso](https://bitsum.com/) 的特定配置片段转换为本程序使用的配置格式。
 
 ---
 
