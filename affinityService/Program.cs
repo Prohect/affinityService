@@ -22,7 +22,8 @@ namespace affinityService
         static Int32 timeInterval = 10000;
         static Int32 selfAffinity = 0b0000_0000_0000_0000_1111_1111_0000_0000;
         static String processLassoConfigPartFileName = "prolasso.ini";
-        static String outputFileName = "config.txt";
+        static String outputFileName = "config.ini";
+        static String configFileName = "processAffinityServiceConfig.ini";
         static void Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
@@ -31,7 +32,6 @@ namespace affinityService
             Directory.CreateDirectory(logDir);
             string logPath = Path.Combine(logDir, DateTime.Now.Date.ToString("yyyyMMdd") + ".log");
             logger = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read);
-
 
             //read args
             bool convertOnly = false;
@@ -46,29 +46,27 @@ namespace affinityService
                     Console.WriteLine("  -console <true|false>      是否在控制台输出日志");
                     Console.WriteLine("  -plfile <file>             ProcessLasso 配置的DefaultAffinitiesEx=此行之后的部分的文件(默认 prolasso.ini)");
                     Console.WriteLine("                             内容示例（不换行）：steamwebhelper.exe,0,8-19,everything.exe,0,8-19");
-                    Console.WriteLine("  -outfile <file>            输出转换的配置文件名 (默认 config.txt)");
+                    Console.WriteLine("  -outfile <file>            输出转换的配置文件名 (默认 config.ini)");
                     Console.WriteLine("  -convert                   从 ProcessLasso 文件的转换到本程序配置并退出");
                     Console.WriteLine("  -interval <ms>             遍历进程的停滞时间间隔 (毫秒, 默认 10000)");
+                    Console.WriteLine("  -config <file>             指定配置文件(默认 processAffinityServiceConfig.ini)");
                     return;
                 }
                 else if (arg == "-affinity" && i + 1 < args.Length)
                     try { selfAffinity = Convert.ToInt32(args[++i].Replace("0b", ""), 2); }
                     catch { Console.WriteLine("无效的 affinity 参数，保持默认"); }
-                else if (arg == "-console" && i + 1 < args.Length)
-                {
-                    if (bool.TryParse(args[++i], out bool consoleFlag))
-                        consoleOutput = consoleFlag;
-                }
+                else if (arg == "-console" && i + 1 < args.Length && bool.TryParse(args[++i], out bool consoleFlag))
+                    consoleOutput = consoleFlag;
                 else if (arg == "-plfile" && i + 1 < args.Length)
                     processLassoConfigPartFileName = args[++i];
                 else if (arg == "-outfile" && i + 1 < args.Length)
                     outputFileName = args[++i];
                 else if (arg == "-convert")
                     convertOnly = true;
-                else if (arg == "-interval" && i + 1 < args.Length)
-                {
-                    if (int.TryParse(args[++i], out int interval)) timeInterval = interval;
-                }
+                else if (arg == "-interval" && i + 1 < args.Length && int.TryParse(args[++i], out int interval))
+                    timeInterval = interval;
+                else if (arg == "-config" && i + 1 < args.Length)
+                    configFileName = args[++i];
             }
             if (convertOnly)
             {
@@ -80,7 +78,7 @@ namespace affinityService
             if (!IsRunningAsAdmin()) Log("running not as Administrator, may not able to set affinity for some process");
             Log(SetProcessAffinityMask(Process.GetCurrentProcess().Handle, new IntPtr(selfAffinity)) ? "self affinity set success " : "self affinity set failed");
 
-            Dictionary<String, IntPtr> config = ReadConfigListFromConfigFile("processAffinityServiceConfig.ini");
+            Dictionary<String, IntPtr> config = ReadConfigListFromConfigFile(configFileName);
             string query = "SELECT ProcessId FROM Win32_Process";
             object pidObj;
             int pid = -1;
