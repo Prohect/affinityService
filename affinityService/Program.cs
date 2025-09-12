@@ -182,12 +182,46 @@ namespace affinityService
             for (int i = 0; i < configList.Count; i++)
             {
                 strings1 = configList[i];
-                String line = strings1[0] + "," + strings1[2] + "\r\n";
+                String line = strings1[0] + "," + ParseAffinityRange(strings1[2]) + "\r\n";
                 byte[] bytes = Encoding.UTF8.GetBytes(line);
                 configFile.Write(bytes, 0, bytes.Length);
             }
             configFile.Close();
         }
+
+        private static int ParseAffinityRange(string range)
+        {
+            range = range.Trim();
+            if (string.IsNullOrEmpty(range)) return 0;
+            int mask = 0;
+            string[] parts = range.Split(',');
+            foreach (string part in parts)
+            {
+                if (part.Contains('-'))
+                {
+                    string[] bounds = part.Split('-');
+                    if (bounds.Length != 2) continue;
+
+                    if (int.TryParse(bounds[0], out int start) && int.TryParse(bounds[1], out int end))
+                    {
+                        for (int i = start; i <= end; i++)
+                        {
+                            mask |= 1 << i;
+                        }
+                    }
+                }
+                else
+                {
+                    if (int.TryParse(part, out int core))
+                    {
+                        mask |= 1 << core;
+                    }
+                }
+            }
+            return mask;
+        }
+
+
 
         private static List<string[]> ReadConfigListFromProcessLassoConfigPartFileName()
         {
