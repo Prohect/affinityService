@@ -6,30 +6,85 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
+using System.Threading;
 
 
 namespace affinityService
 {
     internal class Program
     {
-        [DllImport("kernel32.dll")]
-        static extern bool SetProcessAffinityMask(IntPtr hProcess, IntPtr dwProcessAffinityMask);
-        [DllImport("kernel32.dll")]
-        static extern IntPtr GetCurrentThread();
-
+        [DllImport("kernel32.dll")] static extern bool SetProcessAffinityMask(IntPtr hProcess, IntPtr dwProcessAffinityMask);
+        //[DllImport("kernel32.dll")] static extern IntPtr GetCurrentThread();
+        static FileStream logger;
+        static bool consoleOutput = true;
+        static Int32 timeInterval = 10000;
+        static Int32 selfAffinity = 0b0000_0000_0000_0000_1111_1111_0000_0000;
+        static String processLassoConfigPartFileName = "prolasso.ini";
+        static String outputFileName = "config.txt";
         static void Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
             Console.InputEncoding = Encoding.UTF8;
-            Process p = Process.GetCurrentProcess();
-            Int32 affinity_e = 0b11111111111100000000;
-            IntPtr mask = new IntPtr(affinity_e);
-            Console.WriteLine(SetProcessAffinityMask(p.Handle, mask) ? "自身进程亲和性修改成功" : "自身进程亲和性修改失败");
+            string logDir = "logs";
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, DateTime.Now.Date.ToString("yyyyMMdd") + ".log");
+            logger = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read);
 
-            Dictionary<String, IntPtr> config = ReadConfigListFromConfigFile("config.txt");
 
+            //read args
+            bool convertOnly = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i].ToLower();
+                if (arg == "-help" || arg == "/?" || arg == "--help")
+                {
+                    Console.WriteLine("Usage: affinityService [options]");
+                    Console.WriteLine("Options:");
+                    Console.WriteLine("  -affinity <binary>         设置本程序的 CPU 亲和掩码 (二进制字符串，如 0b1111_0000)");
+                    Console.WriteLine("  -console <true|false>      是否在控制台输出日志");
+                    Console.WriteLine("  -plfile <file>             ProcessLasso 配置的DefaultAffinitiesEx=此行之后的部分的文件(默认 prolasso.ini)");
+                    Console.WriteLine("                             内容示例（不换行）：steamwebhelper.exe,0,8-19,everything.exe,0,8-19");
+                    Console.WriteLine("  -outfile <file>            输出转换的配置文件名 (默认 config.txt)");
+                    Console.WriteLine("  -convert                   从 ProcessLasso 文件的转换到本程序配置并退出");
+                    Console.WriteLine("  -interval <ms>             遍历进程的停滞时间间隔 (毫秒, 默认 10000)");
+                    return;
+                }
+                else if (arg == "-affinity" && i + 1 < args.Length)
+                    try { selfAffinity = Convert.ToInt32(args[++i].Replace("0b", ""), 2); }
+                    catch { Console.WriteLine("无效的 affinity 参数，保持默认"); }
+                else if (arg == "-console" && i + 1 < args.Length)
+                {
+                    if (bool.TryParse(args[++i], out bool consoleFlag))
+                        consoleOutput = consoleFlag;
+                }
+                else if (arg == "-plfile" && i + 1 < args.Length)
+                    processLassoConfigPartFileName = args[++i];
+                else if (arg == "-outfile" && i + 1 < args.Length)
+                    outputFileName = args[++i];
+                else if (arg == "-convert")
+                    convertOnly = true;
+                else if (arg == "-interval" && i + 1 < args.Length)
+                {
+                    if (int.TryParse(args[++i], out int interval)) timeInterval = interval;
+                }
+            }
+            if (convertOnly)
+            {
+                ConvertFromProcessLassoConfigPartFileNameAndGetConfigList();
+                return;
+            }
+            //done read args
+
+            if (!IsRunningAsAdmin()) Log("running not as Administrator, may not able to set affinity for some process");
+            Log(SetProcessAffinityMask(Process.GetCurrentProcess().Handle, new IntPtr(selfAffinity)) ? "self affinity set success " : "self affinity set failed");
+
+            Dictionary<String, IntPtr> config = ReadConfigListFromConfigFile("processAffinityServiceConfig.ini");
             string query = "SELECT ProcessId FROM Win32_Process";
+            object pidObj;
+            int pid = -1;
+            Process process = null;
             while (true)
             {
                 using (var searcher = new ManagementObjectSearcher(query))
@@ -39,63 +94,88 @@ namespace affinityService
                     {
                         try
                         {
-                            var pidObj = mo["ProcessId"];
+                            pidObj = mo["ProcessId"];
                             if (pidObj == null) continue;
-                            int pid = Convert.ToInt32(pidObj);
-                            Process proc = null;
-                            try
-                            {
-                                proc = Process.GetProcessById(pid);
-                            }
-                            catch (ArgumentException aex)
-                            {
-                                Console.WriteLine("  -> 进程已退出 (GetProcessById 抛出 ArgumentException)" + aex.Message);
-                                continue;
-                            }
-
-                            /*// 打印一些 Process 可读属性（某些访问可能抛异常）
-                            try
-                            {
-                                Console.WriteLine($"  Process.ProcessName: {proc.ProcessName}");
-                                Console.WriteLine($"  Id: {proc.Id}");
-                                Console.WriteLine($"  SessionId: {proc.SessionId}");
-                                Console.WriteLine($"  StartTime: {SafeGet(() => proc.StartTime)}");
-                                Console.WriteLine($"  Threads: {SafeGet(() => proc.Threads.Count)}");
-                            }
-                            catch (Win32Exception wex)
-                            {
-                                Console.WriteLine("  -> 访问 Process 属性被拒绝: " + wex.Message);
-                            }
-                            catch (InvalidOperationException iex)
-                            {
-                                Console.WriteLine("  -> " + iex.Message);
-                            }*/
-
-                            try
-                            {
-                                if (config.TryGetValue(proc.ProcessName, out IntPtr affinityMask)) if (!proc.ProcessorAffinity.Equals(affinityMask)) SetProcessAffinityMask(proc.Handle, affinityMask);
-                            }
-                            catch (Win32Exception wex)
-                            {
-                                Console.WriteLine("  -> 读取/设置 ProcessorAffinity 被拒绝: " + wex.Message);
-                            }
-                            catch (InvalidOperationException iex)
-                            {
-                                Console.WriteLine("  -> 进程已退出，无法读取/设置亲和性" + iex.Message);
-                            }
+                            pid = Convert.ToInt32(pidObj);
+                            process = Process.GetProcessById(pid);
+                            if (config.TryGetValue(Path.GetFileName(process.MainModule.FileName).ToLower(), out IntPtr affinityMask)) if (!process.ProcessorAffinity.Equals(affinityMask)) InnerSetProcessAffinityMask(process, affinityMask);
+                            pid = -1;
+                            process = null;
                         }
-                        catch (Exception ex)
+                        catch (ArgumentException e)
                         {
-                            Console.WriteLine("遍历时发生异常: " + ex.Message);
+                            //Log((process == null ? pid == -1 ? "pid is null!" : pid.ToString() : process.ProcessName) + "  -> 进程已退出 (GetProcessById 抛出 ArgumentException)" + e.Message);
+                        }
+                        catch (Win32Exception e)
+                        {
+                            //Log((process == null ? pid == -1 ? "pid is null!" : pid.ToString() : process.ProcessName) + "  -> 读取/设置 ProcessorAffinity 被拒绝: " + e.Message);
+                        }
+                        catch (InvalidOperationException e)
+                        {
+                            //Log((process == null ? pid == -1 ? "pid is null!" : pid.ToString() : process.ProcessName) + "  -> 进程已退出，无法读取/设置亲和性" + e.Message);
+                        }
+                        catch (Exception e)
+                        {
+                            Log((process == null ? pid == -1 ? "pid is null!" : pid.ToString() : process.ProcessName) + "遍历时发生异常: " + e.Message);
                         }
                     }
                 }
+                Thread.Sleep(timeInterval);
             }
         }
 
-        private static List<string[]> ConvertFromProcessLassoConfigPartFileNameAndGetConfigList(String processLassoConfigPartFileName, String outputFileName)
+        private static void Log(String log)
         {
-            List<string[]> configList = ReadConfigListFromProcessLassoConfigPartFileName(processLassoConfigPartFileName);
+            byte[] bytes = Encoding.UTF8.GetBytes(log + "\r\n");
+            logger.Write(bytes, 0, bytes.Length);
+            logger.Flush();
+            if (consoleOutput) Console.WriteLine(log);
+        }
+
+        private static void InnerSetProcessAffinityMask(Process process, IntPtr dwProcessAffinityMask)
+        {
+            Log("setAffinity:" + process.ProcessName + "  ->\t" + dwProcessAffinityMask);
+            SetProcessAffinityMask(process.Handle, dwProcessAffinityMask);
+        }
+        private static Dictionary<String, IntPtr> ReadConfigListFromConfigFile(string configFile)
+        {
+            FileStream fs = new FileStream(configFile, FileMode.OpenOrCreate, FileAccess.Read, FileShare.ReadWrite);
+            Dictionary<String, IntPtr> config = new Dictionary<String, IntPtr>();
+            if (fs.CanRead)
+            {
+                byte[] bytes = new byte[fs.Length];
+                while (fs.Read(bytes, 0, (int)fs.Length) != 0) ;
+                foreach (var str0 in Encoding.UTF8.GetString(bytes).Split('\n'))
+                {
+                    try
+                    {
+                        String str = str0.Replace("\r", "").ToLower();
+                        if (str.Length == 0) continue;
+                        if (str.StartsWith("#")) continue;
+                        String[] parts = str.Split(',');
+                        if (parts.Length != 2) continue;
+                        Int32 affinityMask = Int32.Parse(parts[1]);
+                        config.Add(parts[0], new IntPtr(affinityMask));
+                    }
+                    catch { }
+                }
+                fs.Close();
+            }
+            else fs.Close();
+            return config;
+        }
+
+        static bool IsRunningAsAdmin()
+        {
+            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+            {
+                WindowsPrincipal principal = new WindowsPrincipal(identity);
+                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+            }
+        }
+        private static void ConvertFromProcessLassoConfigPartFileNameAndGetConfigList()
+        {
+            List<string[]> configList = ReadConfigListFromProcessLassoConfigPartFileName();
 
             FileStream configFile = new FileStream(outputFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             String[] strings1;
@@ -107,10 +187,9 @@ namespace affinityService
                 configFile.Write(bytes, 0, bytes.Length);
             }
             configFile.Close();
-            return configList;
         }
 
-        private static List<string[]> ReadConfigListFromProcessLassoConfigPartFileName(string processLassoConfigPartFileName)
+        private static List<string[]> ReadConfigListFromProcessLassoConfigPartFileName()
         {
             FileStream fs = new FileStream(processLassoConfigPartFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             List<string[]> configList = new List<string[]>();
@@ -148,49 +227,5 @@ namespace affinityService
             return configList;
         }
 
-        private static Dictionary<String, IntPtr> ReadConfigListFromConfigFile(string configFile)
-        {
-            FileStream fs = new FileStream(configFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            Dictionary<String, IntPtr> config = new Dictionary<String, IntPtr>();
-            if (fs.CanRead)
-            {
-                StringBuilder sb = new StringBuilder();
-
-                byte[] bytes = new byte[fs.Length];
-                fs.Read(bytes, 0, (int)fs.Length);
-                String all = Encoding.UTF8.GetString(bytes);
-                String[] strs = all.Split('\n');
-
-                for (global::System.Int32 i = 0; i < strs.Length; i++)
-                {
-                    try
-                    {
-                        String str = strs[i];
-                        str = str.Trim();
-                        if (str.Length == 0) continue;
-                        String[] parts = str.Split(',');
-                        Int32 affinityMask = Int32.Parse(parts[1]);
-                        config.Add(parts[0], new IntPtr(affinityMask));
-                    }
-                    catch { }
-                }
-                fs.Close();
-            }
-            else fs.Close();
-            return config;
-        }
-
-        static string SafeGet(Func<object> getter)
-        {
-            try
-            {
-                var v = getter();
-                return v?.ToString() ?? "<null>";
-            }
-            catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException)
-            {
-                return $"<error: {ex.Message}>";
-            }
-        }
     }
 }
