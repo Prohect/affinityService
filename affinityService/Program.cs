@@ -177,6 +177,8 @@ namespace affinityService
 
             FileStream configFile = new FileStream(outputFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             String[] strings1;
+            byte[] head = Encoding.UTF8.GetBytes("#\tthe affinity mask is a int32 value, windows us its binary form to set affinity for process\r\n#\teg.\t254=0b0000_0000_1111_1110 refers cores(1-7),which don't not include core0 and all other cores");
+            configFile.Write(head,0,head.Length);
             for (int i = 0; i < configList.Count; i++)
             {
                 strings1 = configList[i];
