@@ -64,7 +64,7 @@ affinityService.exe -convert -plfile lasso.ini -outfile config.ini
 * 从 `lasso.ini` 中读取Process Lasso的配置片段
 * 生成本程序可用的配置文件 `config.ini`
 * 执行完毕后程序退出
-* 请包含且只包含这一部分，不换行 eg.
+* Process Lasso的配置片段的文件请包含且只包含这一部分，不换行 eg.
 ```bash
 steamwebhelper.exe,0,8-19,everything.exe,0,8-19
 ```
